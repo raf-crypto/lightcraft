@@ -370,7 +370,7 @@ impl FaceGpu {
     }
 
     fn largest_binding(&self) -> u64 {
-        self.dev.limits.max_storage_buffer_binding_size.min(self.dev.limits.max_buffer_size)
+        self.dev.limits.max_storage_buffer_binding_size.min(self.dev.limits.max_buffer_size).min(crate::ctx::MAX_SHADER_BINDING)
     }
 
     /// The dispatches of one convolution reading `input` and writing `output`, or `None` when it exceeds the device.

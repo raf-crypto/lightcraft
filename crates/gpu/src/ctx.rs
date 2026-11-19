@@ -923,8 +923,17 @@ fn limits_override() -> Option<(u64, u64)> {
     parse_limits(&std::env::var("LIGHTCRAFT_GPU_LIMITS").ok()?)
 }
 
-/// `limits` lowered to `cap` ([`limits_override`]: storage binding bytes, buffer bytes).
+/// The most bytes a kernel can address through one storage binding, whatever the adapter reports:
+/// WGSL's `arrayLength` and naga's bounds checks are 32-bit, so wgpu-hal hands a larger binding to
+/// them as `u32::MAX` bytes (Metal reports the whole buffer size, ~9 GiB on an M1 Pro). What lies
+/// past 4 GiB then reads as zero and writes to it are dropped: a 400 MP source (4.5 GiB of RGB
+/// floats) rendered with its last ninth empty, black, or white under Convert Negative (issue #3037).
+pub(crate) const MAX_SHADER_BINDING: u64 = u32::MAX as u64 & !(wgpu::COPY_BUFFER_ALIGNMENT - 1);
+
+/// `limits` with storage bindings within [`MAX_SHADER_BINDING`], lowered to `cap`
+/// ([`limits_override`]: storage binding bytes, buffer bytes).
 fn capped(mut limits: wgpu::Limits, cap: Option<(u64, u64)>) -> wgpu::Limits {
+    limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.min(MAX_SHADER_BINDING);
     if let Some((binding, buffer)) = cap {
         limits.max_storage_buffer_binding_size = limits.max_storage_buffer_binding_size.min(binding);
         limits.max_buffer_size = limits.max_buffer_size.min(buffer);
@@ -1191,6 +1200,11 @@ mod tests {
         assert_eq!((c.max_storage_buffer_binding_size, c.max_buffer_size), (8 << 20, 16 << 20));
         let c = super::capped(big.clone(), None);
         assert_eq!((c.max_storage_buffer_binding_size, c.max_buffer_size), (1 << 30, 1 << 31));
+        // a binding past 4 GiB is never taken, however large the adapter says it may be (#3037)
+        let metal = wgpu::Limits { max_storage_buffer_binding_size: 9 << 30, max_buffer_size: 9 << 30, ..wgpu::Limits::default() };
+        let c = super::capped(metal, None);
+        assert_eq!(c.max_storage_buffer_binding_size, super::MAX_SHADER_BINDING);
+        assert!(c.max_storage_buffer_binding_size <= u64::from(u32::MAX), "within what a kernel can address");
 
         let _lock = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some((device, queue, info)) = test_device() else {

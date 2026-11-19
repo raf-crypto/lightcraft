@@ -143,7 +143,7 @@ impl Bm3dGpu {
         let axis = bm3d::starts(nb, p.step);
         let nr = axis.len();
         let blocks_bytes = (nr * nr * 4 * GROUP * BLOCK * BLOCK * 4) as u64;
-        if blocks_bytes > d.limits.max_storage_buffer_binding_size.min(d.limits.max_buffer_size) {
+        if blocks_bytes > d.limits.max_storage_buffer_binding_size.min(d.limits.max_buffer_size).min(crate::ctx::MAX_SHADER_BINDING) {
             return unsupported(format!("{} cannot hold a tile's filtered blocks ({} MB)", d.info.name, blocks_bytes >> 20));
         }
         let (dct, window) = bm3d::constants(BLOCK);
