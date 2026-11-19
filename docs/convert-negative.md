@@ -3,7 +3,8 @@
 **Photo ▸ Convert Negative** renders a scan of a film negative (a camera or scanner capture of colour
 or black-and-white film) as a positive. The conversion is part of the photo's edit, like every other
 setting: it is non-destructive, it can be switched off, copied to the other frames of a roll, synced,
-saved in a preset and undone, and previews and exports convert with the same numbers.
+saved in a preset (when Convert Negative is ticked: a new preset leaves it out by default, so a
+look saved from an ordinary photo doesn't switch a scan back to a negative) and undone, and previews and exports convert with the same numbers.
 
 ## Using it
 
@@ -19,7 +20,8 @@ saved in a preset and undone, and previews and exports convert with the same num
    - **Film Base**: click the selector, then click the unexposed border of the film on the photo. The
      picked colour is the film base (black) over the measured one; the measured white point still
      applies. **Clear** goes back to the measurement.
-   - **Gray Point**: the same selector for something in the scene that should come out grey.
+   - **Gray Point**: the same selector for something in the scene that should come out grey. It
+     replaces the measurement's automatic balance, which only makes the scene average grey.
    - **Tone** (Lab, Linear and Cinematic profiles) and **Color** (Neutral, Lab Warm, Lab Cool, Print,
      Clean); "From Preset" uses the film preset's own. **White Balance** (As Shot, Warm, Cool, Tungsten
      Film) starts at As Shot: presets carry their warmth in Temp and Tint instead.

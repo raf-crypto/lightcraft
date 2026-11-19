@@ -238,8 +238,9 @@ impl Converter {
         // the linear value, after encoding).
         let brightness = libm::exp2f(-finite(p.brightness, 0.0).clamp(-50.0, 50.0) / 50.0) * p.tone.gamma();
         // The per-channel balance corrects a colour cast; a monochrome positive has none, and
-        // unequal gammas would tint it.
-        let balance = if p.monochrome { [1.0; 3] } else { p.balance };
+        // unequal gammas would tint it. A picked neutral replaces it: the pick's gains are taken on
+        // the levelled positive, and a balance applied after them would bring a cast back.
+        let balance = if p.monochrome || neutral.is_some() { [1.0; 3] } else { p.balance };
         let mut gamma = [0.0; 3];
         let mut knee = [0.0; 3];
         for ch in 0..3 {
@@ -607,6 +608,18 @@ mod tests {
         let before = Converter::new(&a, &neutral(), Encoding::Srgb, None).convert(scan_of(0.4));
         assert!(before[0] > before[1] + 0.02, "the cast shows: {before:?}");
         let after = Converter::new(&a, &neutral(), Encoding::Srgb, Some(scan_of(0.4))).convert(scan_of(0.4));
+        assert!((after[0] - after[1]).abs() < 2e-3 && (after[1] - after[2]).abs() < 2e-3, "{after:?}");
+    }
+
+    #[test]
+    fn a_neutral_sample_wins_over_the_measured_balance() {
+        // a measured balance that does not suit this grey (a scene average that isn't grey)
+        let a = Analysis::manual(BASE);
+        let p = Params { balance: [0.99, 1.105, 0.92], ..neutral() };
+        let scan_of = |s: f32| [Encoding::Srgb.encode(negative(s, 0)), Encoding::Srgb.encode(negative(s, 1)), Encoding::Srgb.encode(negative(s, 2))];
+        let before = Converter::new(&a, &p, Encoding::Srgb, None).convert(scan_of(0.4));
+        assert!((before[0] - before[1]).abs() > 0.02, "the balance casts the grey: {before:?}");
+        let after = Converter::new(&a, &p, Encoding::Srgb, Some(scan_of(0.4))).convert(scan_of(0.4));
         assert!((after[0] - after[1]).abs() < 2e-3 && (after[1] - after[2]).abs() < 2e-3, "{after:?}");
     }
 
