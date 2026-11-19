@@ -142,6 +142,27 @@ fn done_return_and_the_menu_entry_again() {
     assert_eq!(h.app.ui.right, RightPanel::Edit);
 }
 
+/// The tool strip's button opens the panel without converting anything, and brings a conversion
+/// back after Done as it was.
+#[test]
+fn the_tool_strip_reopens_the_panel() {
+    let mut h = demo();
+    h.request("ui.menu.invoke", json!({"command": "view.detail"}), T);
+    h.settle(SETTLE);
+    click(&mut h, "icon:negative");
+    assert_eq!(h.app.ui.right, RightPanel::Negative);
+    assert!(!negative(&h).enabled, "opening the panel converts nothing");
+
+    click(&mut h, "check:negativeOn");
+    let converted = negative(&h);
+    assert!(converted.enabled && converted.measured.is_some(), "{converted:?}");
+    click(&mut h, "button:negative-done");
+    assert_eq!(h.app.ui.right, RightPanel::Edit);
+    click(&mut h, "icon:negative");
+    assert_eq!(h.app.ui.right, RightPanel::Negative);
+    assert_eq!(negative(&h), converted, "reopening keeps the conversion");
+}
+
 #[test]
 fn without_a_photo_the_menu_entry_is_an_error() {
     let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });

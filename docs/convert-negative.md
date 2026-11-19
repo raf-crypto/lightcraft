@@ -30,7 +30,9 @@ look saved from an ordinary photo doesn't switch a scan back to a negative) and 
    Switching back to Simple ignores the advanced settings without forgetting them.
 4. **Measure Again** after cropping to the frame (or when the first measurement took in the holder).
    **Done** (or Return) goes back to the Edit panel. Everything else in the Edit panel then edits the
-   positive.
+   positive. The **Convert Negative** button in the tool strip (or the Photo menu entry again) opens the
+   panel once more with the conversion as it was; on a photo that isn't converted, the button only opens
+   the panel, where the **Film negative** box switches the conversion on.
 
 The **Film negative** box switches the conversion off and on again without losing its settings, as does
 the section's eye (`develop.sectionEnabled` with `negative`); resetting the section switches the whole
