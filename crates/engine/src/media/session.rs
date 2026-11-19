@@ -37,11 +37,11 @@ impl crate::Session {
     ) -> Option<RenderJob> {
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
-        let level = SourceLevel::for_size(if thumb_bucket.is_some() {
-            max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
+        let level = if thumb_bucket.is_some() {
+            SourceLevel::for_size(max_w.max(max_h)) // (grid thumbnails of tight crops stay cheap)
         } else {
-            source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
-        });
+            SourceLevel::for_view(max_w.max(max_h), source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h)))
+        };
         // the Before side develops with the Before settings' camera profile (or none), not the edit's
         let source = if before {
             let mut q = (*p).clone();

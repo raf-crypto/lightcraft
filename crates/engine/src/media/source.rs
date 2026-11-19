@@ -67,7 +67,26 @@ impl SourceLevel {
             _ => SourceLevel::Full,
         }
     }
+
+    /// The level for a view `out_long` pixels long whose source must be `needed` pixels long
+    /// (`source_edge_needed`): as [`for_size`](Self::for_size), except that a crop leaving the
+    /// preview just short is shown from it, enlarged up to [`VIEW_UPSCALE`], when the view itself
+    /// fits a preview. A zoom, a large render or an export needs more and still gets the original.
+    pub fn for_view(out_long: usize, needed: usize) -> SourceLevel {
+        let preview = SourceLevel::Preview.max_edge();
+        if out_long <= preview && needed > preview && needed as f64 <= preview as f64 * VIEW_UPSCALE {
+            SourceLevel::Preview
+        } else {
+            SourceLevel::for_size(needed)
+        }
+    }
 }
+
+/// How much a view may enlarge the preview rather than develop the original ([`SourceLevel::for_view`]).
+/// A loupe about 2400 px long showing 80 % of the photo needs a 3000 px source: from the 2560 px
+/// preview it is slightly soft, from the original it costs a full decode (a 45 MP raw: ~1.3 s, plus
+/// ~0.5 GB to upload and convert) on every open of a cropped photo and a 2–3 s wait after each edit.
+pub const VIEW_UPSCALE: f64 = 1.25;
 
 /// Pixels along the source's long edge that an output `out_long` pixels long needs: a crop shows
 /// only part of the photo, so its pixels come from a source that many times larger (the source

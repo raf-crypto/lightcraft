@@ -349,6 +349,28 @@ fn work_gate_counts_past_usize_max_instead_of_overflowing() {
     assert_eq!(t.join().unwrap(), 1);
 }
 
+/// A loupe showing a moderate crop is shown from the preview, slightly enlarged, instead of
+/// developing the original; a tight crop, a zoom or a render larger than a preview still gets it.
+#[test]
+fn a_view_of_a_moderate_crop_enlarges_the_preview() {
+    // a 2383 px loupe showing 78 % of the photo needs 3055 px
+    assert_eq!(SourceLevel::for_view(2383, 3055), SourceLevel::Preview);
+    assert_eq!(SourceLevel::for_view(2383, 3200), SourceLevel::Preview, "up to VIEW_UPSCALE");
+    assert_eq!(SourceLevel::for_view(2383, 3201), SourceLevel::Full, "a tighter crop");
+    assert_eq!(SourceLevel::for_view(3000, 3000), SourceLevel::Full, "a view larger than a preview");
+    assert_eq!(SourceLevel::for_view(2383, 8192), SourceLevel::Full, "100 %");
+    assert_eq!((SourceLevel::for_view(256, 256), SourceLevel::for_view(2000, 2000)), (SourceLevel::Thumb, SourceLevel::Preview));
+    // an export of the same crop still develops the original
+    let mut s = crate::Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id;
+    let mut d = (*s.catalog.photo(id).unwrap().develop).clone();
+    d.crop.geometry.rect = lightcraft_geom::Rect::new(0.11, 0.11, 0.89, 0.89);
+    s.set_develop(id, d, "crop").unwrap();
+    assert_eq!(s.render_job(id, 2383, 1600, false, true).unwrap().level, SourceLevel::Preview);
+    let export = s.export_job(id, 2383, 1600, lightcraft_pipeline::OutputSpace::Srgb, lightcraft_pipeline::OutputDepth::U8).unwrap();
+    assert_eq!(export.level, SourceLevel::Full);
+}
+
 #[test]
 fn levels_cover_sizes_and_large_exports_use_the_original() {
     assert_eq!(SourceLevel::for_size(256), SourceLevel::Thumb);
