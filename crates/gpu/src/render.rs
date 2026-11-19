@@ -527,6 +527,10 @@ static SOURCE_UPLOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 /// stages; it is released with the buffer pool when the app idles.
 static SHARED_SOURCE: std::sync::Mutex<Option<(std::sync::Weak<Rgb32f>, Arc<Buf>)>> = std::sync::Mutex::new(None);
 
+/// Device bytes of [`SHARED_SOURCE`], readable without its lock: an upload holds the lock for as
+/// long as it copies the photo (~0.5 GB, a second or two), and `ui.inspect` asked on the UI thread.
+static SHARED_SOURCE_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     let mut g = SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((weak, buf)) = &*g
@@ -537,6 +541,7 @@ fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
     // the previous photo's copy goes (on a render thread it is retired with the render's other
     // buffers, so for a moment both exist)
     *g = None;
+    SHARED_SOURCE_BYTES.store(0, std::sync::atomic::Ordering::Relaxed);
     SOURCE_UPLOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let buf = Arc::new(upload());
     // a failed upload's buffer holds zeros: this render falls back, and no other may reuse it
@@ -544,17 +549,20 @@ fn shared_source(src: &Arc<Rgb32f>, upload: impl FnOnce() -> Buf) -> Arc<Buf> {
         return buf;
     }
     *g = Some((Arc::downgrade(src), buf.clone()));
+    SHARED_SOURCE_BYTES.store(buf.len * 4, std::sync::atomic::Ordering::Relaxed);
     buf
 }
 
 /// Free the shared big source (see [`shared_source`]).
 pub(crate) fn release_shared_source() {
-    *SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let mut g = SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner());
+    *g = None;
+    SHARED_SOURCE_BYTES.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Device bytes of the shared big source, 0 when there is none.
+/// Device bytes of the shared big source, 0 when there is none. Never waits for an upload.
 pub(crate) fn shared_source_bytes() -> usize {
-    SHARED_SOURCE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |(_, b)| b.len * 4)
+    SHARED_SOURCE_BYTES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn source_uploads() -> u64 {
