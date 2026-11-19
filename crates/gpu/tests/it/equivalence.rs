@@ -1512,3 +1512,46 @@ fn device_histogram_is_exact() {
     assert_eq!((r.image.width, r.image.height), (500, 400));
     assert_eq!(r.histogram, lightcraft_raster::Histogram::of_srgb8(&r.image), "window");
 }
+
+/// Issue #3037: a crop of a full-size photo, rendered settled after a draft (the loupe's order),
+/// with the view's stages and the shared big source. The GPU used to leave the bottom rows
+/// unwritten: black, or white under Convert Negative (an empty sample is fully dense film).
+#[test]
+fn cropped_full_size_source_fills_every_row() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(3, 6000, 4000);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    for negative in [false, true] {
+        for angle in [0.0, 3.0] {
+            let mut s = DevelopSettings::default();
+            s.crop.geometry.rect = Rect::new(0.1, 0.05, 0.9, 0.85);
+            s.crop.geometry.angle = angle;
+            if negative {
+                s.negative.enabled = true;
+                s.negative.measured = Some(lightcraft_pipeline::negative::measure(&src, 0.08).expect("measure"));
+            }
+            let cache = StageCache::default();
+            let name = format!("crop negative={negative} angle={angle}");
+            // the draft, then the settled render the crop makes read the whole source
+            let _ = lightcraft_gpu::render(&src, &info, &s, &RenderRequest::fit(1200, 1200), Some(&cache)).expect("gpu draft");
+            for req in [RenderRequest::fit(2560, 2560), RenderRequest::fit(6000, 6000)] {
+                let cpu = render(&src, &info, &s, &req).image;
+                let gpu = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu settled");
+                let (w, h) = (cpu.width, cpu.height);
+                // the last row that differs by more than the equivalence bound, from the bottom
+                let bad = (0..h)
+                    .rev()
+                    .take_while(|&y| (0..w).any(|x| (0..3).any(|c| cpu.data[y * w + x][c].abs_diff(gpu.image.data[y * w + x][c]) > MAX_LSB)))
+                    .count();
+                eprintln!("{name} {w}x{h}: {bad} bottom rows differ");
+                assert_eq!(bad, 0, "{name} {w}x{h}: the GPU's last {bad} rows differ from the CPU's");
+                // (the whole image to the mean bound only: the negative's CPU stage between the GPU
+                // stages rounds a few pixels one step past `MAX_LSB`)
+                let (mean, _, _) = diff(&cpu, &gpu.image);
+                assert!(mean < MEAN_LSB, "{name} {w}x{h}: mean {mean:.4} LSB");
+            }
+        }
+    }
+}
