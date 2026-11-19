@@ -236,7 +236,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // copied 1:1 (no resample in the pipeline, whose prefilter and bilinear pass soften detail near
     // the output's limit) and shrunk once, by the Lanczos display fit below.
     // (zoomed in under a window render, the whole frame is hidden: it stays canvas-sized)
-    let want = whole_frame_edge(app, interacting, &plan, native_long, texture_side);
+    let preview_long = preview_pixels(native_long, photo.width.max(photo.height) as usize);
+    let want = whole_frame_edge(app, interacting, &plan, native_long, preview_long, texture_side);
     // The short side is rounded, not truncated: a truncated box (2560 x 1706 for a 2560 x 1707
     // source) made the render a slightly anisotropic resample of its source, a 2-tap blur along
     // one axis only. A box that matches the source to rounding is rendered at exactly its size.
@@ -792,13 +793,27 @@ fn loupe_plan(app: &LightcraftApp, id: PhotoId, look: u64, sizes: crate::region:
     plan
 }
 
-fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region::LoupePlan, native_long: usize, texture_side: usize) -> usize {
+/// The pixels across the shown frame (`native_long` of the photo's `photo_long`: less under a crop)
+/// that the preview source holds.
+fn preview_pixels(native_long: usize, photo_long: usize) -> usize {
+    let preview = lightcraft_engine::SourceLevel::Preview.max_edge();
+    if photo_long <= preview {
+        return native_long;
+    }
+    let p = preview as f64 * native_long as f64 / photo_long as f64;
+    if p.is_finite() { (p as usize).clamp(1, native_long.max(1)) } else { native_long }
+}
+
+/// `preview_long`: [`preview_pixels`] of the frame. At rest the frame renders at no less than that,
+/// the preview copied 1:1; a crop's share of it, not the whole preview's 2560 px, or a cropped
+/// photo at rest would need more than the preview and develop the original (a 45 MP raw: seconds).
+fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region::LoupePlan, native_long: usize, preview_long: usize, texture_side: usize) -> usize {
     if interacting || plan.window_edge.is_some() {
         plan.main_edge
     } else {
         // (a user's explicit Preview size below the preview level still caps it)
         let limit = if app.ui.settings.preview_limit == 0 { usize::MAX } else { app.ui.settings.preview_limit as usize };
-        let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
+        let floor = preview_long.min(limit).min(native_long);
         plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
     }
 }
@@ -1322,6 +1337,16 @@ pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response,
 
 #[cfg(test)]
 mod tests {
+    /// At rest a cropped photo renders at its share of the preview, which the preview covers 1:1.
+    #[test]
+    fn a_crop_rests_at_its_share_of_the_preview() {
+        use super::preview_pixels;
+        assert_eq!(preview_pixels(8192, 8192), 2560, "the whole photo: the preview's size");
+        assert_eq!(preview_pixels(6488, 8192), 2027, "79 % of a 45 MP raw");
+        assert_eq!(preview_pixels(1800, 2000), 1800, "a photo no larger than a preview");
+        assert_eq!(preview_pixels(0, 8192), 1, "never zero");
+    }
+
     /// The camera JPEG goes only where the window render will: a window of the left half of the
     /// frame covers the left half of the drawn photo, not the strips beside it.
     #[test]
