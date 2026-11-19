@@ -78,6 +78,15 @@ impl SettingsGroup {
             .collect()
     }
 
+    /// Groups a new preset includes by default: [`default_copy`](Self::default_copy) without Convert
+    /// Negative. The group always states the whole conversion (a copy from a photo that is not a
+    /// negative switches it off), which suits copying across a roll but not a look: a preset saved
+    /// from an ordinary photo would turn a converted scan back into a negative, and one saved from
+    /// a scan would carry that scan's measurement to every photo. It can still be ticked.
+    pub fn default_preset() -> Vec<SettingsGroup> {
+        SettingsGroup::default_copy().into_iter().filter(|g| *g != SettingsGroup::Negative).collect()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             SettingsGroup::Profile => "Profile",

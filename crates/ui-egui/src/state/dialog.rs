@@ -1,9 +1,9 @@
 use super::{Deserialize, Serialize};
 
 /// Settings group ids (`SettingsGroup` serde names) a new preset includes by default: everything
-/// but crop, masks, spots and red eye.
+/// but crop, masks, spots, red eye and Convert Negative (`SettingsGroup::default_preset`).
 pub fn default_preset_groups() -> Vec<String> {
-    lightcraft_develop::SettingsGroup::default_copy().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
+    lightcraft_develop::SettingsGroup::default_preset().iter().filter_map(|g| serde_json::to_value(g).ok()?.as_str().map(str::to_string)).collect()
 }
 
 impl Dialog {

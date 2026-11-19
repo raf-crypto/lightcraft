@@ -1356,7 +1356,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let id = active(s, c)?;
             let name = str_param(p, "name").ok_or_else(|| bad(c, "missing name"))?;
             let group = str_param(p, "group").unwrap_or("User Presets");
-            let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
+            let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_preset);
             let d = s.develop_of(id).unwrap_or_default();
             let pid = format!("user.{}.{}", s.presets.len(), name.to_lowercase().replace(' ', "-"));
             s.presets.push(Preset::from_settings(&pid, name, group, &d, &groups));

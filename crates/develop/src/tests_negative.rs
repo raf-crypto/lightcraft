@@ -82,6 +82,23 @@ fn copying_the_group_carries_the_measurement_to_the_rest_of_a_roll() {
     assert_eq!(SettingsGroup::Negative.keys(), &["negative"]);
 }
 
+#[test]
+fn a_new_preset_leaves_the_conversion_alone() {
+    assert!(!SettingsGroup::default_preset().contains(&SettingsGroup::Negative));
+    // a look saved from an ordinary photo keeps a converted scan converted, at any amount
+    let mut warm = DevelopSettings::default();
+    warm.light.exposure = 0.5;
+    let look = crate::presets::Preset::from_settings("user.0.warm", "Warm", "User Presets", &warm, &SettingsGroup::default_preset());
+    for amount in [0.5, 1.0] {
+        let applied = look.apply(&on(), amount);
+        assert_eq!(applied.negative, on().negative, "amount {amount}");
+        assert!(applied.light.exposure > 0.0, "amount {amount}: the look still applies");
+    }
+    // and one saved from a scan carries no measurement to other photos
+    let from_scan = crate::presets::Preset::from_settings("user.1.scan", "Scan", "User Presets", &on(), &SettingsGroup::default_preset());
+    assert_eq!(from_scan.apply(&DevelopSettings::default(), 1.0).negative, Negative::default());
+}
+
 impl Negative {
     fn into_settings(self) -> DevelopSettings {
         DevelopSettings { negative: self, ..DevelopSettings::default() }
