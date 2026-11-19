@@ -104,42 +104,60 @@ pub fn converter(n: &Negative) -> Converter {
     Converter::new(&a, &p, Encoding::Linear, neutral)
 }
 
+/// One negative's conversion with its tables built, for converting many images or pixels with the
+/// same settings (the colour noise model's tiles): building the tables costs ~1 ms.
+pub struct Conversion {
+    c: Converter,
+    tables: Box<Tables>,
+    into: [[f32; 3]; 3],
+    back: [[f32; 3]; 3],
+}
+
+impl Conversion {
+    /// `None` when the settings convert no negative.
+    pub fn new(s: &DevelopSettings) -> Option<Self> {
+        enabled(s).then(|| {
+            let c = converter(&s.negative);
+            let mut tables = Box::new(Tables::blank());
+            c.tables(&mut tables);
+            Conversion { c, tables, into: to_srgb().to_f32(), back: to_rec2020().to_f32() }
+        })
+    }
+
+    /// One pixel, linear Rec.2020.
+    pub fn pixel(&self, px: [f32; 3]) -> [f32; 3] {
+        let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
+        mul(&self.back, self.c.convert_with(&self.tables, mul(&self.into, px).map(unit)))
+    }
+
+    /// `img` (linear Rec.2020) in place.
+    pub fn apply(&self, img: &mut Rgb32f) {
+        let w = img.width;
+        par_rows(&mut img.data, w, |_, row| {
+            for px in row {
+                *px = self.pixel(*px);
+            }
+        });
+    }
+}
+
 /// Converts `img` (linear Rec.2020) in place when the settings convert a negative.
 pub fn apply(img: &mut Rgb32f, s: &DevelopSettings) {
     if !enabled(s) {
         return;
     }
     crate::timed("negative", || {
-        let c = converter(&s.negative);
-        let mut tables = Box::new(Tables::blank());
-        c.tables(&mut tables);
-        let (into, back) = (to_srgb().to_f32(), to_rec2020().to_f32());
-        let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
-        let w = img.width;
-        par_rows(&mut img.data, w, |_, row| {
-            for px in row {
-                let scan = mul(&into, *px).map(unit);
-                *px = mul(&back, c.convert_with(&tables, scan));
-            }
-        });
+        if let Some(c) = Conversion::new(s) {
+            c.apply(img);
+        }
     });
 }
 
 /// The conversion of one source pixel (linear Rec.2020) to the positive the pipeline sees, for a
 /// few samples (a picker): the identity while the settings convert no negative.
 pub fn pixel_converter(s: &DevelopSettings) -> impl Fn([f32; 3]) -> [f32; 3] + use<> {
-    let on = enabled(s).then(|| {
-        let c = converter(&s.negative);
-        let mut tables = Box::new(Tables::blank());
-        c.tables(&mut tables);
-        (c, tables)
-    });
-    let (into, back) = (to_srgb().to_f32(), to_rec2020().to_f32());
-    move |px| {
-        let Some((c, tables)) = &on else { return px };
-        let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
-        mul(&back, c.convert_with(tables, mul(&into, px).map(unit)))
-    }
+    let on = Conversion::new(s);
+    move |px| on.as_ref().map_or(px, |c| c.pixel(px))
 }
 
 /// `src` as the rest of the pipeline sees it: converted to a positive when the settings convert a

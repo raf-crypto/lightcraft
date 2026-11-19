@@ -602,8 +602,9 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     }
     let t = profiling().then(std::time::Instant::now);
     let (lum, _) = local::nr_params(s, p.detail_scale);
-    // the source oriented and prefiltered once for all tiles
+    // the source oriented and prefiltered once for all tiles, the negative's tables built once
     let sampled = full.sample_windows(src, *fw, *fh, &windows);
+    let negative = negative::Conversion::new(s);
     let tiles: Vec<Rgb32f> = windows
         .into_iter()
         .zip(sampled)
@@ -622,7 +623,9 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 full: p.full.clone(),
                 ..*p
             };
-            negative::apply(&mut img, s);
+            if let Some(c) = &negative {
+                c.apply(&mut img);
+            }
             local_tone::apply(&mut img, info, &tile);
             local::white_balance(&mut img, info, s);
             local::apply_nr(&mut img, lum, None);
