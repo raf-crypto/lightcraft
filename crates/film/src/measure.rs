@@ -71,7 +71,9 @@ pub fn measure(pixels: &[[f32; 3]], w: usize, h: usize, o: &MeasureOptions) -> R
     let mut hist = ValueHistogram::new();
     for y in (y0..y1).step_by(step) {
         for x in (x0..x1).step_by(step) {
-            if let Some(p) = pixels.get(y * w + x) {
+            // (a pixel that isn't a number says nothing about the scan: encoded, it would read as
+            // the densest value, and 0.3 % of them collapsed the white point)
+            if let Some(p) = pixels.get(y * w + x).filter(|p| p.iter().all(|v| v.is_finite())) {
                 hist.push(Encoding::Srgb.encode3(*p));
             }
         }
@@ -169,5 +171,24 @@ mod tests {
         assert!(measure(&px, 40, 30, &MeasureOptions { max_samples: 0, ..MeasureOptions::default() }).is_err());
         let nan = vec![[f32::NAN, f32::INFINITY, -1.0]; 100];
         assert!(measure(&nan, 10, 10, &MeasureOptions::default()).is_err());
+    }
+
+    /// Pixels that aren't numbers (1 %, well over the white clip) are left out: they used to read
+    /// as the densest value, collapsing the white point to 0 and skewing the balance.
+    #[test]
+    fn samples_that_are_not_numbers_leave_the_measurement_alone() {
+        let (w, h) = (300, 200);
+        let o = MeasureOptions { border: 0.12, ..MeasureOptions::default() };
+        let clean = measure(&scan(w, h), w, h, &o).unwrap();
+        let mut px = scan(w, h);
+        for (i, p) in px.iter_mut().enumerate().filter(|(i, _)| i % 100 == 0) {
+            *p = if i % 200 == 0 { [f32::NAN; 3] } else { [f32::INFINITY, 0.3, 0.2] };
+        }
+        let dirty = measure(&px, w, h, &o).unwrap();
+        for ch in 0..3 {
+            assert!(dirty.white[ch] > 0.0, "{dirty:?}");
+            assert!((dirty.white[ch] - clean.white[ch]).abs() <= clean.white[ch] * 0.05, "{dirty:?} vs {clean:?}");
+            assert!((dirty.balance[ch] - clean.balance[ch]).abs() < 0.02, "{dirty:?} vs {clean:?}");
+        }
     }
 }

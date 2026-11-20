@@ -188,7 +188,9 @@ pub fn measure(src: &Rgb32f, border: f64) -> Result<NegativeMeasurement, String>
         return Err(format!("the border must be between 0 and 0.45 of each edge, not {border}"));
     }
     let m = to_srgb().to_f32();
-    let px: Vec<[f32; 3]> = src.data.par_iter().map(|v| m.map(|r| unit(r[0] * v[0] + r[1] * v[1] + r[2] * v[2]))).collect();
+    // (a sample that isn't a number stays one, for the measurement to leave out; `unit` would make it 0, the densest)
+    let in_unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { f32::NAN };
+    let px: Vec<[f32; 3]> = src.data.par_iter().map(|v| m.map(|r| in_unit(r[0] * v[0] + r[1] * v[1] + r[2] * v[2]))).collect();
     let o = lightcraft_film::MeasureOptions { border: border as f32, ..Default::default() };
     let m = lightcraft_film::measure::measure(&px, src.width, src.height, &o)?;
     let d = |v: [f32; 3]| v.map(f64::from);
