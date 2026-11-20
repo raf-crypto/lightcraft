@@ -352,6 +352,28 @@ pub(crate) fn map(cx: &mut Cx<'_>, k: &str, n: usize, extra: &[u32], ins: [Optio
     cx.run(k, &p, &[ins[0], ins[1], ins[2], Some(out)], groups1(n));
 }
 
+/// Convert Negative on the device: [`lightcraft_pipeline::negative::Conversion::apply`] of `n`
+/// pixels of `src` (linear Rec.2020) into a new buffer. `None` without a program (an sRGB host,
+/// which the pipeline never is).
+pub(crate) fn negative(cx: &mut Cx<'_>, src: &Buf, n: usize, c: &lightcraft_pipeline::negative::Conversion) -> Option<Buf> {
+    let prog = cx.gpu.upload(&c.program()?);
+    let (into, back) = c.matrices();
+    let mut p = vec![n as u32];
+    p.extend(into.iter().chain(back.iter()).flatten().map(|v| v.to_bits()));
+    let out = cx.gpu.buffer(n * 3);
+    cx.run("negative_k", &p, &[Some(src), Some(&prog), Some(&out)], groups1(n));
+    Some(out)
+}
+
+/// [`negative`] of a whole image, read back (the kernel's tests).
+pub(crate) fn negative_image(gpu: &Gpu, img: &Rgb32f, c: &lightcraft_pipeline::negative::Conversion) -> Option<Rgb32f> {
+    let mut cx = Cx::new(gpu);
+    let src = gpu.upload(rgb_words(img));
+    let out = negative(&mut cx, &src, img.width * img.height, c)?;
+    let back = cx.read_rgb(&out, img.width, img.height);
+    (!crate::ctx::failed()).then_some(back)
+}
+
 /// Self-guided filter of a plane (`local::guided`).
 fn guided(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
     let ab = guided_coeffs(cx, p, w, h, sigma, eps);

@@ -124,6 +124,17 @@ impl Conversion {
         })
     }
 
+    /// The conversion as a GPU kernel's program (`lightcraft_film::program`): the kernel runs
+    /// [`Conversion::pixel`] between [`Conversion::matrices`].
+    pub fn program(&self) -> Option<Vec<f32>> {
+        self.c.program(&self.tables)
+    }
+
+    /// Rec.2020 → linear sRGB (the film model's space) and back, row-major.
+    pub fn matrices(&self) -> ([[f32; 3]; 3], [[f32; 3]; 3]) {
+        (self.into, self.back)
+    }
+
     /// One pixel, linear Rec.2020.
     pub fn pixel(&self, px: [f32; 3]) -> [f32; 3] {
         let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);

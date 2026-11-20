@@ -1555,3 +1555,102 @@ fn cropped_full_size_source_fills_every_row() {
         }
     }
 }
+
+/// The Convert Negative kernel against the CPU's conversion (`negative::apply`), pixel by pixel,
+/// over scan values from far denser than any film (the exact path) to brighter than the base, and
+/// samples that aren't numbers; Simple and Advanced settings, presets with toning, monochrome,
+/// picks and the extremes of the sliders. Compared in display terms: sRGB-encoded, within 1/1000.
+#[test]
+fn negative_kernel_matches_the_cpu() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::NegativeMeasurement;
+    // linear Rec.2020: a log ramp of grey and of each primary, then special values
+    let mut data = Vec::new();
+    for i in 0..4000 {
+        let v = 10f32.powf(-7.0 + 7.3 * i as f32 / 3999.0);
+        data.extend([[v; 3], [v, v * 0.6, v * 0.3], [v * 0.2, v, v * 0.5], [v * 0.4, v * 0.5, v]]);
+    }
+    data.extend([[0.0; 3], [-0.1, 0.2, 0.3], [f32::NAN, 0.3, 0.2], [f32::INFINITY, 0.3, 0.2], [2.0, 1.5, 1.2]]);
+    let img = Rgb32f { width: data.len(), height: 1, data };
+    let measured = NegativeMeasurement { base: [0.6, 0.35, 0.15], black: [0.55, 0.32, 0.14], white: [0.05, 0.03, 0.015], balance: [0.95, 1.05, 1.1] };
+    let base = |f: &dyn Fn(&mut lightcraft_develop::Negative)| {
+        let mut s = DevelopSettings::default();
+        s.negative.enabled = true;
+        s.negative.measured = Some(measured);
+        f(&mut s.negative);
+        s
+    };
+    let cases: Vec<(&str, DevelopSettings)> = vec![
+        ("simple standard", base(&|_| {})),
+        ("unmeasured", base(&|n| n.measured = None)),
+        ("portra 400 (toning)", base(&|n| n.preset = "Portra 400".into())),
+        ("cinestill 800", base(&|n| n.preset = "CineStill 800".into())),
+        ("monochrome", base(&|n| n.preset = "Monochrome".into())),
+        (
+            "advanced",
+            base(&|n| {
+                n.advanced = true;
+                n.tone = "cinematic_rich".into();
+                n.look = "lab_warm".into();
+                n.wb = "tungsten_film".into();
+                n.fade = 40.0;
+                n.glow = -30.0;
+                n.whites = 20.0;
+                n.blacks = -15.0;
+                n.highlights = 25.0;
+                n.shadows = -25.0;
+            }),
+        ),
+        (
+            "advanced picks",
+            base(&|n| {
+                n.advanced = true;
+                n.base = Some([0.62, 0.36, 0.16]);
+                n.gray = Some([0.2, 0.12, 0.05]);
+                n.look = "print".into();
+            }),
+        ),
+        (
+            "sliders high",
+            base(&|n| {
+                n.exposure = 3.0;
+                n.brightness = 50.0;
+                n.contrast = 50.0;
+                n.temp = 50.0;
+                n.tint = -50.0;
+                n.saturation = 50.0;
+                n.range = 10.0;
+            }),
+        ),
+        (
+            "sliders low",
+            base(&|n| {
+                n.exposure = -3.0;
+                n.brightness = -50.0;
+                n.contrast = -50.0;
+                n.saturation = -50.0;
+                n.range = 1.0;
+            }),
+        ),
+    ];
+    let encode = |v: f32| if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    for (name, s) in cases {
+        let mut cpu = img.clone();
+        lightcraft_pipeline::negative::apply(&mut cpu, &s);
+        let gpu = lightcraft_gpu::convert_negative(&img, &s).expect("the kernel runs");
+        let (mut worst, mut at) = (0f32, 0);
+        for (i, (a, b)) in cpu.data.iter().zip(&gpu.data).enumerate() {
+            for c in 0..3 {
+                let d = (encode(a[c].clamp(0.0, 1.0)) - encode(b[c].clamp(0.0, 1.0))).abs();
+                let d = if d.is_nan() { f32::INFINITY } else { d };
+                if d > worst {
+                    (worst, at) = (d, i);
+                }
+            }
+        }
+        eprintln!("{name:<22} max |Δ| {worst:.5} (sRGB) at {at}: cpu {:?} gpu {:?}", cpu.data[at], gpu.data[at]);
+        assert!(worst <= 1e-3, "{name}: max |Δ| {worst} at {at}: input {:?}, cpu {:?}, gpu {:?}", img.data[at], cpu.data[at], gpu.data[at]);
+    }
+}

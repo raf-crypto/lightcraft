@@ -154,9 +154,9 @@ pub struct Colour {
     pub mids: [f32; 3],
     pub shadow_tint: [f32; 3],
     /// The matrix is not the identity.
-    mixes: bool,
+    pub(crate) mixes: bool,
     /// The mid-tone balance or the shadow tint is not neutral, so the luminance weights are needed.
-    weighted: bool,
+    pub(crate) weighted: bool,
     pub is_identity: bool,
 }
 
@@ -224,12 +224,12 @@ impl Colour {
 /// says how far from the end the toning reaches.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Toning {
-    highs: [f32; 3],
-    highs_reach: f32,
-    lows: [f32; 3],
-    lows_reach: f32,
+    pub(crate) highs: [f32; 3],
+    pub(crate) highs_reach: f32,
+    pub(crate) lows: [f32; 3],
+    pub(crate) lows_reach: f32,
     /// Saturation after the curve, as a chroma factor.
-    saturation: f32,
+    pub(crate) saturation: f32,
     pub is_identity: bool,
 }
 

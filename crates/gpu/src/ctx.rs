@@ -28,6 +28,11 @@ const MODULES: &[Module] = &[
         entries: &["main"],
     },
     Module {
+        src: include_str!("wgsl/negative.wgsl"),
+        bindings: &[("src", false, "f32"), ("prog", false, "f32"), ("dst", true, "f32")],
+        entries: &["negative_k"],
+    },
+    Module {
         src: include_str!("wgsl/blur.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
         entries: &["box_h", "box_v", "minmax", "median_h", "median_v"],
@@ -448,6 +453,47 @@ fn constants() -> String {
     s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
+    }
+    // Convert Negative's program (`lightcraft_film::program`): its layout, generated so the kernel can't drift from it
+    {
+        use lightcraft_film::program as fp;
+        for (name, v) in [
+            ("TABLE", lightcraft_film::TABLE_SIZE),
+            ("FINE_SIZE", fp::FINE_SIZE),
+            ("LEVELS", fp::LEVELS),
+            ("OUTPUT", fp::OUTPUT),
+            ("FINE", fp::FINE),
+            ("FACTOR", fp::HEAD_FACTOR),
+            ("EXPONENT", fp::HEAD_EXPONENT),
+            ("SCALE", fp::HEAD_SCALE),
+            ("BLACK", fp::HEAD_BLACK),
+            ("GAINS", fp::HEAD_GAINS),
+            ("MATRIX", fp::HEAD_MATRIX),
+            ("MIXES", fp::HEAD_MIXES),
+            ("PRESAT", fp::HEAD_PRESAT),
+            ("WEIGHTED", fp::HEAD_WEIGHTED),
+            ("MIDS", fp::HEAD_MIDS),
+            ("SHADOW_TINT", fp::HEAD_SHADOW_TINT),
+            ("COLOUR_IDENTITY", fp::HEAD_COLOUR_IDENTITY),
+            ("MONOCHROME", fp::HEAD_MONOCHROME),
+            ("WHITE_GAIN", fp::HEAD_WHITE_GAIN),
+            ("BLACK_POINT", fp::HEAD_BLACK_POINT),
+            ("FOLDED", fp::HEAD_FOLDED),
+            ("HIGHS", fp::HEAD_HIGHS),
+            ("HIGHS_REACH", fp::HEAD_HIGHS_REACH),
+            ("LOWS", fp::HEAD_LOWS),
+            ("LOWS_REACH", fp::HEAD_LOWS_REACH),
+            ("SATURATION", fp::HEAD_SATURATION),
+            ("TONING_IDENTITY", fp::HEAD_TONING_IDENTITY),
+        ] {
+            s += &format!("const NEG_{name}: u32 = {v}u;\n");
+        }
+        s += &format!(
+            "const NEG_EXACT_BELOW: f32 = {:?};\nconst NEG_CAP: f32 = {:?};\nconst NEG_MIN_T: f32 = {:?};\n",
+            fp::PROGRAM_EXACT_BELOW,
+            fp::PROGRAM_LEVELS_CAP,
+            lightcraft_film::film::MIN_TRANSMITTANCE
+        );
     }
     s
 }

@@ -16,6 +16,7 @@ lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
 lightcraft-faces = { workspace = true }
 lightcraft-pipeline = { workspace = true }
+lightcraft-film = { workspace = true }
 log = { workspace = true }
 
 # Native only: Metal / Vulkan / DX12 through wgpu (pure Rust; the drivers are the system's).

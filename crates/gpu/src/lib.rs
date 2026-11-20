@@ -497,6 +497,14 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
     }
 }
 
+/// Convert Negative of `img` (linear Rec.2020) by the GPU kernel, for comparing it with the CPU's
+/// `lightcraft_pipeline::negative::apply`. `None` without a GPU or when `s` converts no negative.
+#[doc(hidden)]
+pub fn convert_negative(img: &Rgb32f, s: &DevelopSettings) -> Option<Rgb32f> {
+    let c = lightcraft_pipeline::negative::Conversion::new(s)?;
+    render::negative_image(device()?, img, &c)
+}
+
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
 /// view's CPU stage cache). `None`: render on the CPU instead. [`try_render`] also says why.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {

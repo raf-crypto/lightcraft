@@ -38,6 +38,7 @@ pub mod film;
 pub mod look;
 pub mod measure;
 pub mod preset;
+pub mod program;
 pub mod tone;
 
 pub use analysis::{Analysis, ValueHistogram};
