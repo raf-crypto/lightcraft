@@ -68,8 +68,10 @@ to the scan. Without a measurement the preset's typical mask colour stands in fo
 In the pipeline it is the first step of the scene-linear stage ([`crates/pipeline/src/negative.rs`](../crates/pipeline/src/negative.rs)),
 before the camera's local tone mapping and white balance, so the measurement, the selectors and the
 conversion all read the same scan values, and the automatic adjustments (Auto, auto white balance and
-its selector, the B&W mix) see the positive. GPU renders run that stage on the CPU while a negative is
-converted.
+its selector, the B&W mix) see the positive. GPU renders convert on the device: the `negative_k` kernel
+([`crates/gpu/src/wgsl/negative.wgsl`](../crates/gpu/src/wgsl/negative.wgsl)) runs the same conversion
+from the tables `lightcraft_film::program` lays out, within 1e-5 of the CPU's (only the camera's local
+tone mapping still sends the whole stage to the CPU).
 
 The measurement and the selectors read the preview-size copy of the scan. The measurement uses the
 crop's box; a straighten angle is not taken into account, so measure before straightening, or crop

@@ -226,7 +226,8 @@ walks the drive.
   the Heal tone correction as two device Gaussians, `spot_apply`; Remove's 48 candidate sources are
   scored by `spot_score` and only the scores are read back; layout and candidates from
   `spots::{layout, candidates, ring_dirs, score_radii, rank}`) run on the device in `lin_cpu`'s
-  order. The histogram is counted on the device (`hist`, atomics, the same sampling grid as
+  order, after Convert Negative (`negative_k`: the film crate's tables and numbers as one buffer,
+  `lightcraft_film::program`, whose layout generates the kernel's constants). The histogram is counted on the device (`hist`, atomics, the same sampling grid as
   `Histogram::of_srgb8`, so it is exact).
 - Soft proofing against an output space (`RenderRequest::proof`, with its destination and display gamut
   warnings) runs in `finish`; a proof against an output-device profile (its 3D table) renders on the CPU.

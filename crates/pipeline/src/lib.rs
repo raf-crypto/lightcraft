@@ -649,7 +649,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     Some(noise)
 }
 
-/// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal, Convert Negative).
+/// Whether the scene-linear stage needs work only the CPU does (defringe, spot removal, the camera's local tone mapping).
 pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
@@ -657,10 +657,10 @@ pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
 }
 
 /// Whether a GPU render runs the whole scene-linear stage through [`lin_cpu`]: the camera's local
-/// tone mapping and Convert Negative are CPU-only and come before the white balance, so the
-/// stages after them cannot be split between the two.
+/// tone mapping is CPU-only and comes before the white balance, so the stages after it cannot be
+/// split between the two. (Convert Negative, before it, has a kernel: `negative_k`.)
 pub fn lin_needs_cpu_stage(info: &SourceInfo, s: &DevelopSettings) -> bool {
-    local_tone::enabled(info, s) || negative::enabled(s)
+    local_tone::enabled(info, s)
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the

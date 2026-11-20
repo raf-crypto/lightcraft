@@ -1547,12 +1547,73 @@ fn cropped_full_size_source_fills_every_row() {
                     .count();
                 eprintln!("{name} {w}x{h}: {bad} bottom rows differ");
                 assert_eq!(bad, 0, "{name} {w}x{h}: the GPU's last {bad} rows differ from the CPU's");
-                // (the whole image to the mean bound only: the negative's CPU stage between the GPU
-                // stages rounds a few pixels one step past `MAX_LSB`)
+                // (the whole image to the mean bound only: enlarged and turned, a few pixels on the
+                // crop's edge round one step past `MAX_LSB`, with or without Convert Negative)
                 let (mean, _, _) = diff(&cpu, &gpu.image);
                 assert!(mean < MEAN_LSB, "{name} {w}x{h}: mean {mean:.4} LSB");
             }
         }
+    }
+}
+
+/// Whole renders with Convert Negative, now converted by its kernel on the GPU: alone, under the
+/// edits that follow it (noise reduction, white balance, the tone stages), with presets that tone,
+/// monochrome, Advanced picks, a crop, and through the view's stages while a negative slider moves.
+#[test]
+fn negative_renders_match() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(3, 900, 600);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(640, 640);
+    let measured = lightcraft_develop::NegativeMeasurement {
+        base: [0.95, 0.9, 0.85],
+        black: [0.9, 0.85, 0.8],
+        white: [0.02, 0.02, 0.02],
+        balance: [0.97, 1.0, 1.04],
+    };
+    let neg = |f: &dyn Fn(&mut DevelopSettings)| {
+        let mut s = DevelopSettings::default();
+        s.negative.enabled = true;
+        s.negative.measured = Some(measured);
+        f(&mut s);
+        s
+    };
+    let cases: Vec<(&str, DevelopSettings)> = vec![
+        ("negative", neg(&|_| {})),
+        ("negative + edits", neg(&|s| typical(s))),
+        ("negative portra 400", neg(&|s| s.negative.preset = "Portra 400".into())),
+        ("negative monochrome", neg(&|s| s.negative.preset = "Monochrome".into())),
+        (
+            "negative advanced",
+            neg(&|s| {
+                s.negative.advanced = true;
+                s.negative.tone = "cinematic_rich".into();
+                s.negative.look = "print".into();
+                s.negative.gray = Some([0.3, 0.3, 0.32]);
+                s.negative.fade = 30.0;
+            }),
+        ),
+        (
+            "negative cropped",
+            neg(&|s| {
+                s.crop.geometry.rect = Rect::new(0.1, 0.05, 0.9, 0.85);
+                s.crop.geometry.angle = 2.0;
+            }),
+        ),
+    ];
+    for (name, s) in &cases {
+        check(name, &src, &info, s, &req);
+    }
+    // a negative slider drag through the view's stages equals fresh renders
+    let cache = StageCache::default();
+    let mut s = neg(&|s| typical(s));
+    for k in 0..4 {
+        s.negative.exposure = 0.3 * k as f64;
+        let warm = lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let fresh = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu");
+        assert_eq!(warm.image, fresh.image, "step {k}");
     }
 }
 

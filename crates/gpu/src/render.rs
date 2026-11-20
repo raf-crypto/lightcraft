@@ -1057,8 +1057,8 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
     let n = w * h;
     let s = &*plan.settings;
     let img = if lightcraft_pipeline::lin_needs_cpu_stage(info, s) {
-        // the camera's local tone mapping (ProRAW gain table, off by default) or Convert Negative:
-        // the whole scene-linear stage on the CPU
+        // the camera's local tone mapping (ProRAW gain table, off by default): the whole
+        // scene-linear stage on the CPU (Convert Negative included, which comes before it)
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),
@@ -1066,12 +1066,13 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
         lightcraft_pipeline::lin_cpu(&mut img, info, plan);
         cx.gpu.upload(rgb_words(&img))
     } else {
-        // `lin_cpu`'s order: white balance, defringe, spots, red eye
+        // `lin_cpu`'s order: Convert Negative, white balance, defringe, spots, red eye
+        let positive = lightcraft_pipeline::negative::Conversion::new(s).and_then(|c| negative(cx, sampled, n, &c));
         let m = local::wb_matrix_for(info, s);
         let mut p = vec![m.is_some() as u32];
         p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
         let out = cx.gpu.buffer(n * 3);
-        map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
+        map(cx, "wb_k", n, &p, [Some(positive.as_ref().unwrap_or(sampled)), None, None], &out);
         let out = defringe(cx, out, plan);
         let out = spots(cx, out, plan);
         if plan.eyes.is_empty() {

@@ -369,12 +369,13 @@ mod tests {
     }
 
     #[test]
-    fn the_cpu_stage_runs_for_a_negative_only_when_it_is_on() {
+    fn a_negative_leaves_the_gpu_its_scene_linear_stage() {
         let info = crate::SourceInfo::default();
         let mut s = DevelopSettings::default();
         assert!(!crate::lin_needs_cpu_stage(&info, &s) && !crate::lin_needs_cpu(&s, &info));
+        // the GPU converts it with its own kernel (`negative_k`)
         s.negative.enabled = true;
-        assert!(crate::lin_needs_cpu_stage(&info, &s) && crate::lin_needs_cpu(&s, &info));
+        assert!(!crate::lin_needs_cpu_stage(&info, &s) && !crate::lin_needs_cpu(&s, &info));
     }
 
     #[test]
