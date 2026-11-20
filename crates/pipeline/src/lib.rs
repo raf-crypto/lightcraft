@@ -604,6 +604,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     let (lum, _) = local::nr_params(s, p.detail_scale);
     // the source oriented and prefiltered once for all tiles, the negative's tables built once
     let sampled = full.sample_windows(src, *fw, *fh, &windows);
+    let t_sampled = t.map(|t| t.elapsed());
     let negative = negative::Conversion::new(s);
     let tiles: Vec<Rgb32f> = windows
         .into_iter()
@@ -632,9 +633,18 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
             img
         })
         .collect();
+    let t_tiles = t.map(|t| t.elapsed());
     let noise = nrc_joint::noise_of_tiles(&tiles);
-    if let Some(t) = t {
-        eprintln!("    nr colour noise model ({} tiles): {:.0} ms", tiles.len(), t.elapsed().as_secs_f64() * 1e3);
+    if let (Some(t), Some(sampled), Some(tiled)) = (t, t_sampled, t_tiles) {
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        eprintln!(
+            "    nr colour noise model ({} tiles): {:.0} ms (sample {:.0}, tiles {:.0}, model {:.0})",
+            tiles.len(),
+            ms(t.elapsed()),
+            ms(sampled),
+            ms(tiled - sampled),
+            ms(t.elapsed() - tiled)
+        );
     }
     Some(noise)
 }
