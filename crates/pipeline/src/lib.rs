@@ -30,6 +30,7 @@ pub mod crystal;
 pub mod cull;
 pub mod curve;
 pub mod dust;
+pub mod film_dust;
 pub mod finish;
 pub mod geometry;
 pub mod lens_blur;

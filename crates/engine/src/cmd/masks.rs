@@ -817,11 +817,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Dust Spots",
             [],
             None,
-            "{sensitivity?: 0..100 (50), add?: bool (true)} — find sensor-dust spots (small soft dark spots on smooth areas) and add a heal spot on each (one undo step) → {spots: [{x, y, size}], added}",
+            "{sensitivity?: 0..100 (50), add?: bool (true), film?: bool (a converted negative: true), polarity?: auto|bright|dark, hairs?: bool (true), max?: n (300)} — find sensor-dust spots (small soft dark spots on smooth areas), or with `film` the dust specks and hairs of a film scan (bright on a converted negative, dark on a slide; found at full size, not where a spot already is), and add a heal spot on each (a brushed one along a hair; one undo step) → {spots: [{x, y, size, hair?}], added}",
             has_active,
             |s, p| {
                 let c = "spot.findDust";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let negative = s.develop_of(id).is_some_and(|d| lightcraft_pipeline::negative::enabled(&d));
+                if p.get("film").and_then(Value::as_bool).unwrap_or(negative) {
+                    return find_film_dust(s, id, p, negative);
+                }
                 // the uncropped photo, so positions are the spots' own coordinates
                 let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
@@ -1123,6 +1127,68 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;
     s.set_develop(id, d, label)
+}
+
+/// The longest edge a film scan is searched for dust at: specks are a few pixels of a 45 MP scan.
+const FILM_DUST_EDGE: usize = 8192;
+
+/// `spot.findDust` with `film`: the dust specks and hairs of a film scan
+/// ([`lightcraft_pipeline::film_dust`]), found in the uncropped photo at up to [`FILM_DUST_EDGE`],
+/// bright on a converted negative (`negative`) and dark otherwise unless `polarity` says; those
+/// an existing spot covers are left out, and the rest become heal spots (brushed along a hair).
+fn find_film_dust(s: &mut Session, id: crate::PhotoId, p: &Value, negative: bool) -> Result<Value> {
+    use lightcraft_pipeline::film_dust::{Params, Polarity, detect};
+    let c = "spot.findDust";
+    let polarity = match str_param(p, "polarity").unwrap_or("auto") {
+        "bright" => Polarity::Bright,
+        "dark" => Polarity::Dark,
+        "auto" if negative => Polarity::Bright,
+        "auto" => Polarity::Dark,
+        other => return Err(bad(c, format!("polarity must be auto, bright or dark, not {other}"))),
+    };
+    let photo = s.catalog.photo(id).ok_or_else(|| bad(c, "no photo"))?;
+    let edge = (photo.width.max(photo.height) as usize).clamp(1, FILM_DUST_EDGE);
+    // the uncropped photo, so positions are the spots' own coordinates
+    let job = s.render_job(id, edge, edge, false, false).ok_or_else(|| bad(c, "no photo"))?;
+    let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
+    let (w, h) = (img.width as f64, img.height as f64);
+    let long = w.max(h).max(1.0);
+    let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+    let params = Params {
+        sensitivity: f64_or(p, "sensitivity", 50.0) as f32,
+        polarity,
+        hairs: bool_or(p, "hairs", true),
+        max: f64_or(p, "max", 300.0).clamp(1.0, 2000.0) as usize,
+        region: Some(lightcraft_pipeline::film_dust::crop_region(&dd, w, h)),
+    };
+    // distance in long-edge units between two normalized points
+    let dist = |a: Point, b: (f64, f64)| (((a.x - b.0) * w / long).powi(2) + ((a.y - b.1) * h / long).powi(2)).sqrt();
+    let found: Vec<_> = detect(&img, &params)
+        .into_iter()
+        .filter(|f| !dd.spots.iter().any(|sp| sp.points.iter().any(|q| f.points.iter().any(|&pt| dist(*q, pt) < sp.size))))
+        .collect();
+    let out: Vec<Value> = found
+        .iter()
+        .filter_map(|f| f.points.first().map(|&(x, y)| json!({"x": x, "y": y, "size": f.radius, "hair": f.hair})))
+        .collect();
+    if !p.get("add").and_then(Value::as_bool).unwrap_or(true) || found.is_empty() {
+        return Ok(json!({"spots": out, "added": 0}));
+    }
+    let base = Spot::default();
+    for f in &found {
+        let mut spot = Spot {
+            mode: SpotMode::Heal,
+            points: f.points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
+            size: f.radius.clamp(SPOT_SIZE.0, SPOT_SIZE.1),
+            feather: base.feather,
+            opacity: 100.0,
+            source_offset: None,
+        };
+        spot.source_offset = pick_source(s, id, &dd, &spot, None);
+        dd.spots.push(spot);
+    }
+    s.set_develop(id, dd, "Find Dust Spots")?;
+    Ok(json!({"spots": out, "added": found.len()}))
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
