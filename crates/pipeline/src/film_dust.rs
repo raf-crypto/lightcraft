@@ -52,6 +52,10 @@ pub struct Found {
     pub radius: f64,
     pub strength: f32,
     pub hair: bool,
+    /// How far it rises above its surroundings at most (display units, 0..1).
+    pub contrast: f32,
+    /// Its brightest (darkest, for [`Polarity::Dark`]) level (display units, 0..1).
+    pub level: f32,
 }
 
 /// The part of the uncropped frame (`w × h`) that `s`'s crop keeps, for [`Params::region`]: its
@@ -81,30 +85,49 @@ pub fn detect(img: &Rgba8, p: &Params) -> Vec<Found> {
     });
     // (at least 10 px: a speck's soft edge reaches about 2.5 σ, and dust of a few pixels' σ must fit)
     let r = ((long as f32 * 0.0025).round() as usize).max(10);
-    let opened = max_filter(&min_filter(&lum, r), r);
-    let top: Vec<f32> = lum.data.iter().zip(&opened.data).map(|(a, b)| (a - b).max(0.0)).collect();
+    // How far each pixel (lightly smoothed, so a single grain counts less) stands above the local
+    // average. (Not above the local minimum, a top-hat's: on a grainy scan the minimum lies far below
+    // the average, so every grain stood as high as a hair.)
+    let fine = gaussian(&lum, 1.0);
+    let around = gaussian(&lum, r as f32 / 2.0);
+    let res: Vec<f32> = fine.data.iter().zip(&around.data).map(|(a, b)| a - b).collect();
     let s = if p.sensitivity.is_finite() { (p.sensitivity / 100.0).clamp(0.0, 1.0) } else { 0.5 };
-    // how many robust spreads of its tile's top-hat a pixel must stand above, and at least how far
-    let k = 12.0 - 8.0 * s;
-    let floor = 0.06 - 0.04 * s;
+    // The grain's spread: each tile's robust one (MAD of the residual), then the neighbourhood's
+    // own with the residual clipped at four of those, so a defect doesn't raise its own threshold
+    // and texture smaller than a tile (a head of hair beside smooth skin) raises its own.
     let (tw, th) = (w.div_ceil(TILE), h.div_ceil(TILE));
-    let thr: Vec<f32> = (0..tw * th)
+    let tile_sigma: Vec<f32> = (0..tw * th)
         .into_par_iter()
         .map(|t| {
             let (x0, y0) = ((t % tw) * TILE, (t / tw) * TILE);
-            let mut v: Vec<f32> = (y0..(y0 + TILE).min(h)).flat_map(|y| top[y * w + x0..y * w + (x0 + TILE).min(w)].iter().copied()).collect();
+            let mut v: Vec<f32> = (y0..(y0 + TILE).min(h)).flat_map(|y| res[y * w + x0..y * w + (x0 + TILE).min(w)].iter().copied()).collect();
             let med = median(&mut v);
             for x in &mut v {
                 *x = (*x - med).abs();
             }
-            let mad = median(&mut v);
-            (med + k * 1.4826 * mad).max(floor)
+            1.4826 * median(&mut v)
         })
         .collect();
+    let tile_at = |i: usize| tile_sigma[(i / w / TILE) * tw + (i % w) / TILE];
+    let noise: Vec<f32> = {
+        let sq = Plane {
+            width: w,
+            height: h,
+            data: (0..w * h)
+                .map(|i| {
+                    let c = 4.0 * tile_at(i);
+                    let v = res[i].clamp(-c, c);
+                    v * v
+                })
+                .collect(),
+        };
+        gaussian(&sq, 2.0 * r as f32).data.iter().map(|v| v.max(0.0).sqrt().max(0.004)).collect()
+    };
     // Dust lies on a fairly even background: where the background itself jumps (an edge within the
     // square, e.g. a window frame, or the film's rebate), the bright side's ragged edge stands out
-    // of the top-hat too, so the threshold rises with the background's local range.
+    // too, so the threshold rises with the background's local range (of its opening).
     let range: Vec<f32> = {
+        let opened = max_filter(&min_filter(&lum, r), r);
         let (hi, lo) = (max_filter(&opened, r), min_filter(&opened, r));
         hi.data.iter().zip(&lo.data).map(|(a, b)| a - b).collect()
     };
@@ -117,44 +140,40 @@ pub fn detect(img: &Rgba8, p: &Params) -> Vec<Found> {
         ),
         _ => (0, 0, w, h),
     };
-    // The tile's threshold misses texture smaller than a tile (a head of hair beside smooth skin):
-    // the neighbourhood's own mean and spread of the top-hat (clipped at the tile's threshold, so
-    // a defect doesn't raise its own) set a second one.
-    let tile_thr = |i: usize| thr[(i / w / TILE) * tw + (i % w) / TILE];
-    let local: Vec<f32> = {
-        let clipped = Plane { width: w, height: h, data: (0..w * h).map(|i| top[i].min(tile_thr(i))).collect() };
-        let sq = Plane { width: w, height: h, data: clipped.data.iter().map(|v| v * v).collect() };
-        let sigma = 2.0 * r as f32;
-        let (mean, mean_sq) = (gaussian(&clipped, sigma), gaussian(&sq, sigma));
-        // (the plain spread of the skewed top-hat runs larger than the tile's robust one: 0.75 × k)
-        mean.data.iter().zip(&mean_sq.data).map(|(m, m2)| m + 0.75 * k * (m2 - m * m).max(0.0).sqrt()).collect()
+    // Two levels: a pixel this many spreads of grain above its surroundings starts a defect, and
+    // connected pixels above the lower level extend it, so a hair comes out whole while grain's
+    // isolated spikes stay small.
+    let k_hi = 7.0 - 3.0 * s;
+    let k_lo = 0.55 * k_hi;
+    let floor = 0.05 - 0.03 * s;
+    let thr_hi = |i: usize| (k_hi * noise[i] + 0.5 * range[i]).max(floor);
+    let inside = |i: usize| {
+        let (x, y) = (i % w, i / w);
+        x >= rx0 && x < rx1 && y >= ry0 && y < ry1
     };
-    let thr_at = |i: usize| tile_thr(i).max(local[i]) + 0.5 * range[i];
-    let on: Vec<bool> = (0..w * h)
-        .into_par_iter()
-        .map(|i| {
-            let (x, y) = (i % w, i / w);
-            x >= rx0 && x < rx1 && y >= ry0 && y < ry1 && top[i] > thr_at(i)
-        })
-        .collect();
-    let min_px = (5.0 - 3.0 * s).round() as usize;
+    let seed: Vec<bool> = (0..w * h).into_par_iter().map(|i| inside(i) && res[i] > thr_hi(i)).collect();
+    let grow: Vec<bool> = (0..w * h).into_par_iter().map(|i| inside(i) && res[i] > k_lo * noise[i] + 0.25 * range[i]).collect();
+    let height: Vec<f32> = res.iter().map(|v| v.max(0.0)).collect();
+    let min_px = (6.0 - 3.0 * s).round() as usize;
     let cap = 64 * r * r; // a component larger than this is a structure, not a defect
     let mut seen = vec![false; w * h];
     let mut out = Vec::new();
     let mut pixels: Vec<usize> = Vec::new();
     for start in 0..w * h {
-        if seen[start] || !on[start] {
+        if seen[start] || !seed[start] {
             continue;
         }
         pixels.clear();
         let mut stack = vec![start];
         seen[start] = true;
-        let mut peak = 0f32;
+        let (mut peak, mut contrast, mut level) = (0f32, 0f32, 0f32);
         while let Some(i) = stack.pop() {
             if pixels.len() <= cap {
                 pixels.push(i);
             }
-            peak = peak.max(top[i] / thr_at(i));
+            peak = peak.max(res[i] / thr_hi(i));
+            contrast = contrast.max(res[i]);
+            level = level.max(fine.data[i]);
             let (x, y) = (i % w, i / w);
             for dy in -1i64..=1 {
                 for dx in -1i64..=1 {
@@ -163,7 +182,7 @@ pub fn detect(img: &Rgba8, p: &Params) -> Vec<Found> {
                         continue;
                     }
                     let j = ny as usize * w + nx as usize;
-                    if !seen[j] && on[j] {
+                    if !seen[j] && grow[j] {
                         seen[j] = true;
                         stack.push(j);
                     }
@@ -171,7 +190,7 @@ pub fn detect(img: &Rgba8, p: &Params) -> Vec<Found> {
             }
         }
         let n = pixels.len();
-        if n < min_px || n > cap || !sharp(&lum, &top, &pixels) {
+        if n < min_px || n > cap || !sharp(&fine, &height, &pixels) {
             continue;
         }
         let Some(f) = describe(&pixels, w, r, p.hairs) else { continue };
@@ -180,6 +199,8 @@ pub fn detect(img: &Rgba8, p: &Params) -> Vec<Found> {
             radius: f.1 / long as f64,
             strength: peak,
             hair: f.2,
+            contrast,
+            level,
         });
     }
     out.sort_by(|a, b| b.strength.total_cmp(&a.strength));
@@ -215,12 +236,19 @@ fn describe(pixels: &[usize], w: usize, r: usize, hairs: bool) -> Option<(Vec<(f
     let length = (12.0 * along).sqrt(); // a uniform line of length L has variance L²/12
     let elongation = (along / across).sqrt();
     let (bw, bh) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
-    if elongation >= 4.0 && length >= 4.0 * r as f64 {
+    // a speck: compact, and filling a fair part of its box
+    if elongation <= 3.0 && n >= 0.3 * bw * bh {
+        return Some((vec![(cx, cy)], (bw.max(bh) / 2.0 + 1.5) * 1.3, false));
+    }
+    // else a fibre or hair if it is thin: its pixels over its extent (a curl or a hook too, which
+    // is neither elongated as a whole nor compact); anything else (ragged texture) is not dust
+    let extent = bw.max(bh).max(length);
+    let width = (n / extent).max(1.0);
+    if extent >= 8.0 && width <= 0.35 * r as f64 {
         if !hairs {
             return None;
         }
         // stroke points: the centroids of the hair's pixels in cells about twice its width
-        let width = (n / length).max(1.0);
         let cell = (2.0 * width).max(3.0);
         let mut cells: std::collections::HashMap<(i64, i64), (f64, f64, f64)> = std::collections::HashMap::new();
         for &i in pixels {
@@ -232,11 +260,7 @@ fn describe(pixels: &[usize], w: usize, r: usize, hairs: bool) -> Option<(Vec<(f
         points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
         return Some((points, (width / 2.0 + 1.5) * 1.3, true));
     }
-    // a speck: compact, and filling a fair part of its box
-    if elongation > 3.0 || n < 0.3 * bw * bh {
-        return None;
-    }
-    Some((vec![(cx, cy)], (bw.max(bh) / 2.0 + 1.5) * 1.3, false))
+    None
 }
 
 /// Whether a component is as sharp as something lying on the film: its steepest step (a central

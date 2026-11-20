@@ -62,6 +62,12 @@ fn main() {
             rendered.as_secs_f64(),
             detected.as_secs_f64()
         );
+        let deciles = |mut v: Vec<f32>| -> String {
+            v.sort_by(f32::total_cmp);
+            (0..=10).map(|d| v.get((d * v.len().saturating_sub(1)) / 10).map_or("-".into(), |x| format!("{x:.2}"))).collect::<Vec<_>>().join(" ")
+        };
+        println!("  contrast deciles: {}", deciles(found.iter().map(|f| f.contrast).collect()));
+        println!("  level deciles:    {}", deciles(found.iter().map(|f| f.level).collect()));
         save(&frame(&img, &found), &out.join(format!("{name}-frame.png")));
         save(&sheet(&img, &found), &out.join(format!("{name}-sheet.png")));
     }
