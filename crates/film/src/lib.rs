@@ -218,7 +218,9 @@ impl Converter {
             let black = if a.black[ch].is_finite() { a.black[ch].max(1.0) } else { 1.0 };
             let white = if a.white[ch].is_finite() { a.white[ch] } else { 0.0 };
             let range = libm::log2f(white) - libm::log2f(black);
-            let range = if range.is_finite() && range > 1e-3 { range } else { RANGE_STOPS };
+            // (a channel of less than a tenth of a stop has no range to level: its exponent would
+            // underflow the factor to 0 and the whole channel would read as black)
+            let range = if range.is_finite() && range >= MIN_RANGE_STOPS { range } else { RANGE_STOPS };
             // 2^(u · S) = (E / black)^(S / range) = base^(S/(γ range)) · black^(−S/range) · t^(−S/(γ range)).
             let e = stops / (NEGATIVE_GAMMA * range);
             exponent[ch] = e;
@@ -411,6 +413,10 @@ impl Converter {
 
 /// Entries per channel in [`Tables`].
 pub const TABLE_SIZE: usize = 2048;
+
+/// The narrowest density range between a channel's black and white points that is levelled;
+/// narrower reads as the base-only default ([`RANGE_STOPS`]).
+const MIN_RANGE_STOPS: f32 = 0.1;
 
 /// Where the levelled positive stops: four stops over white, deep in what the white point clips.
 /// Without it a scan value near zero puts a channel at 10⁸ and the colour stage's rounding
@@ -609,6 +615,24 @@ mod tests {
         assert!(before[0] > before[1] + 0.02, "the cast shows: {before:?}");
         let after = Converter::new(&a, &neutral(), Encoding::Srgb, Some(scan_of(0.4))).convert(scan_of(0.4));
         assert!((after[0] - after[1]).abs() < 2e-3 && (after[1] - after[2]).abs() < 2e-3, "{after:?}");
+    }
+
+    /// A channel of half a stop: its densest scan values overflowed the exposure and read as the
+    /// base, black; they are the most exposure, white, on the exact path and through the tables.
+    #[test]
+    fn the_densest_values_of_a_narrow_channel_are_white() {
+        let a = Analysis::from_scan_values([0.5; 3], [0.5; 3], [0.4; 3], Encoding::Linear).expect("a range");
+        let c = Converter::new(&a, &Params { tone: Tone::Linear, ..neutral() }, Encoding::Linear, None);
+        let mut t = std::boxed::Box::new(Tables::blank());
+        c.tables(&mut t);
+        for v in [0.0, 1e-5, 1e-4, 0.01] {
+            let (exact, table) = (c.convert([v; 3]), c.convert_with(&t, [v; 3]));
+            assert!(exact.iter().chain(&table).all(|x| *x > 0.9), "{v}: {exact:?} {table:?}");
+        }
+        // a channel of a hundredth of a stop is no range: the base-only default, not all black
+        let a = Analysis::from_scan_values([0.5; 3], [0.5; 3], [0.4965; 3], Encoding::Linear).expect("a range");
+        let out = Converter::new(&a, &neutral(), Encoding::Linear, None).convert([0.05; 3]);
+        assert!(out.iter().all(|x| *x > 0.1), "{out:?}");
     }
 
     #[test]

@@ -45,7 +45,9 @@ pub fn exposure_encoded_raw(v: f32, enc: Encoding, factor: f32, exponent: f32) -
         Encoding::Srgb => factor * color::srgb_decode_pow(v.max(MIN_TRANSMITTANCE_SRGB), -exponent),
         Encoding::Linear => factor * libm::powf(v.max(MIN_TRANSMITTANCE), -exponent),
     };
-    if e.is_finite() { e } else { 1.0 }
+    // a finite scan value whose exposure overflows is denser than anything: the most exposure
+    // (white, once the levels cap it), not the base (black)
+    if e.is_finite() { e } else { f32::MAX }
 }
 
 use crate::color;
