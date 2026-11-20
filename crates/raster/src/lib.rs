@@ -204,20 +204,39 @@ impl<T: Copy + Default> Image<T> {
     }
     /// Apply an EXIF orientation (stored → displayed).
     /// [`Self::oriented`] without a copy when `o` is the identity.
-    pub fn into_oriented(self, o: lightcraft_geom::Orientation) -> Self {
+    pub fn into_oriented(self, o: lightcraft_geom::Orientation) -> Self
+    where
+        T: Send + Sync,
+    {
         if o == lightcraft_geom::Orientation::Normal { self } else { self.oriented(o) }
     }
 
-    pub fn oriented(&self, o: lightcraft_geom::Orientation) -> Self {
+    /// One row-parallel pass, each displayed pixel read from where the orientation takes it: as
+    /// [`Self::flip_h`] then [`Self::rotate_cw`] / [`Self::rotate_180`] turns, without their
+    /// intermediate copies (three full copies, the last single-threaded, for a 45 MP photo turned
+    /// 270°: ~0.6 s of every CPU render of it). A buffer shorter than its size reads as `T::default()`.
+    pub fn oriented(&self, o: lightcraft_geom::Orientation) -> Self
+    where
+        T: Send + Sync,
+    {
         let (flip, turns) = o.to_parts();
-        let mut img = if flip { self.flip_h() } else { self.clone() };
-        match turns {
-            1 => img = img.rotate_cw(),
-            2 => img = img.rotate_180(),
-            3 => img = img.rotate_180().rotate_cw(),
-            _ => {}
-        }
-        img
+        let (w, h) = (self.width, self.height);
+        let (ow, oh) = if turns % 2 == 1 { (h, w) } else { (w, h) };
+        let mut out = Image::<T>::new(ow, oh);
+        par_rows(&mut out.data, ow, |y, row| {
+            for (x, v) in row.iter_mut().enumerate() {
+                // the turns undone: where (x, y) was in the flipped image
+                let (fx, fy) = match turns {
+                    1 => (y, h - 1 - x),
+                    2 => (w - 1 - x, h - 1 - y),
+                    3 => (w - 1 - y, x),
+                    _ => (x, y),
+                };
+                let sx = if flip { w - 1 - fx } else { fx };
+                *v = self.data.get(fy * w + sx).copied().unwrap_or_default();
+            }
+        });
+        out
     }
 }
 
@@ -311,6 +330,25 @@ mod tests {
         assert_eq!(img.sample_bilinear(f32::MAX, 0.0), [2.0, 0.0, 1.0]);
         assert_eq!(img.sample_bilinear(f32::NEG_INFINITY, f32::NEG_INFINITY), [0.0, 0.0, 1.0]);
         assert_eq!(img.sample_bilinear(1.5, 0.5), [1.0, 0.0, 1.0], "an ordinary sample is as before");
+    }
+
+    /// The one-pass orientation gives the pixels of the flip-then-turn composition it replaced, for
+    /// every orientation of a non-square image.
+    #[test]
+    fn oriented_matches_flipping_then_turning() {
+        use lightcraft_geom::Orientation::*;
+        let img = Image::from_fn(5, 3, |x, y| (y * 5 + x) as u32);
+        for o in [Normal, FlipH, Rotate180, FlipV, Transpose, Rotate90, Transverse, Rotate270] {
+            let (flip, turns) = o.to_parts();
+            let mut want = if flip { img.flip_h() } else { img.clone() };
+            match turns {
+                1 => want = want.rotate_cw(),
+                2 => want = want.rotate_180(),
+                3 => want = want.rotate_180().rotate_cw(),
+                _ => {}
+            }
+            assert_eq!(img.oriented(o), want, "{o:?}");
+        }
     }
 
     #[test]
