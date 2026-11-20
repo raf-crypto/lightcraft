@@ -1718,7 +1718,11 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
     assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    // …nor a raw decoded for a stand-in (the view's own render is decoding it), only a cached thumbnail
+    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    assert!(q.quick.is_none() && q.rendered.is_err(), "{:?}", q.quick);
+    drop(s.thumb_job(id, 512).unwrap().run());
+    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Cached));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

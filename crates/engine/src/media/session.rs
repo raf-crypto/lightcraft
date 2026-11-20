@@ -421,13 +421,22 @@ impl crate::Session {
     }
 
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
-    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
+    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail (for a
+    /// raw, a cached one only).
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
-        let cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
+        let mut cached = vec![(self.media.rendered.clone(), self.view_key(&p, apply_crop))];
+        // An edited raw's thumbnail is taken only from the cache: rendering one decodes the whole
+        // sensor (a CR3 keeps no smaller copy: ~1.3 s of CPU for a 45 MP file), as the view's own
+        // render is doing at that moment, and the two decodes only slowed each other down. The
+        // loupe shows the grid's thumbnail meanwhile.
+        let raw = p.kind == MediaKind::Raw;
+        if raw {
+            cached.extend(small.cache.clone());
+        }
         // (the photo too: a virtual copy shares the file and, unedited, the settings)
         let h = Hasher128::new()
             .str(&content_key(&p))
@@ -453,7 +462,7 @@ impl crate::Session {
             embedded_cache,
             embedded_on_disk: false,
             minimum_embedded_edge: None,
-            small: apply_crop.then(|| Box::new(small)),
+            small: (apply_crop && !raw).then(|| Box::new(small)),
         })
     }
 
