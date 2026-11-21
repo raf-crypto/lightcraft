@@ -70,7 +70,10 @@ fn ring_stats(img: &Rgb32f, c: (f32, f32), radii: [f32; 3]) -> Option<Vec<[f32; 
     Some(out)
 }
 
-fn score(img: &Rgb32f, target: (f32, f32), source: (f32, f32), r: f32) -> f32 {
+/// How badly the patch at `source` would stand in for the spot of radius `r` at `target` (lower
+/// is better; `f32::MAX` when either reaches outside `img`): their surroundings compared, and the
+/// source's inside against the target's surroundings.
+pub fn score(img: &Rgb32f, target: (f32, f32), source: (f32, f32), r: f32) -> f32 {
     let [around, within] = score_radii(r);
     let (Some(a), Some(b)) = (ring_stats(img, target, around), ring_stats(img, source, around)) else { return f32::MAX };
     // also compare the inside of the source against the target's surroundings (texture continuity)

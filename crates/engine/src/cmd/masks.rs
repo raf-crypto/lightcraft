@@ -1175,20 +1175,104 @@ fn find_film_dust(s: &mut Session, id: crate::PhotoId, p: &Value, negative: bool
         return Ok(json!({"spots": out, "added": 0}));
     }
     let base = Spot::default();
-    for f in &found {
+    let full = film_dust_scoring_image(&img);
+    let region = params.region.unwrap_or((0.0, 0.0, 1.0, 1.0));
+    for (k, f) in found.iter().enumerate() {
         let mut spot = Spot {
-            mode: SpotMode::Heal,
+            mode: if f.hair { SpotMode::Fill } else { SpotMode::Heal },
             points: f.points.iter().map(|&(x, y)| Point::new(x, y)).collect(),
             size: f.radius.clamp(SPOT_SIZE.0, SPOT_SIZE.1),
             feather: base.feather,
             opacity: 100.0,
             source_offset: None,
         };
-        spot.source_offset = pick_source(s, id, &dd, &spot, None);
+        if !f.hair {
+            spot.source_offset = film_dust_source(&full, &found, k, spot.size * long, region).or_else(|| pick_source(s, id, &dd, &spot, None));
+        }
         dd.spots.push(spot);
     }
     s.set_develop(id, dd, "Find Dust Spots")?;
     Ok(json!({"spots": out, "added": found.len()}))
+}
+
+/// Whether the patch of radius `r` (pixels) around `source` holds nothing that stands out from the
+/// target's surroundings (the ring 1.05–1.6 r around `target`): no sample further from their mean
+/// than 0.12 or four of their spreads. A heal takes its texture as the source less its blur, and a
+/// bright structure beside the source (a leaf's vein, another hair) pulls that blur up and leaves
+/// the texture deeply negative: the heal came out as a black blot.
+fn film_dust_clean_source(img: &lightcraft_raster::Rgb32f, target: (f32, f32), source: (f32, f32), r: f32) -> bool {
+    let (w, h) = (img.width as f32, img.height as f32);
+    let lum = |x: f32, y: f32| {
+        let c = img.sample_bilinear(x.clamp(0.0, w - 1.0), y.clamp(0.0, h - 1.0));
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    };
+    let ring: Vec<f32> = (0..32)
+        .flat_map(|i| {
+            let a = i as f32 / 32.0 * std::f32::consts::TAU;
+            [1.05f32, 1.3, 1.6].map(|k| lum(target.0 + a.cos() * r * k, target.1 + a.sin() * r * k))
+        })
+        .collect();
+    let mean = ring.iter().sum::<f32>() / ring.len() as f32;
+    let spread = (ring.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / ring.len() as f32).sqrt();
+    let limit = (4.0 * spread).max(0.12);
+    // the source's patch and the blur around it: a grid out to 1.6 r
+    let n = 9;
+    (0..n * n).all(|i| {
+        let (u, v) = ((i % n) as f32 / (n - 1) as f32 * 2.0 - 1.0, (i / n) as f32 / (n - 1) as f32 * 2.0 - 1.0);
+        (lum(source.0 + u * 1.6 * r, source.1 + v * 1.6 * r) - mean).abs() <= limit
+    })
+}
+
+/// The render dust was found in, as the source scoring reads it.
+fn film_dust_scoring_image(img: &lightcraft_raster::Rgba8) -> lightcraft_raster::Rgb32f {
+    lightcraft_raster::Rgb32f {
+        width: img.width,
+        height: img.height,
+        data: img.data.iter().map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0]).collect(),
+    }
+}
+
+/// A heal source (normalized offset) for `found[k]` with a radius of `r` pixels, chosen on the
+/// full-size render it was found in. (The usual choice, [`pick_source`], looks at a 512 px proxy,
+/// where a speck of a 45 MP scan is half a pixel: its source fell anywhere, a dark leaf or the
+/// film's black edge, and the heal turned black.) One offset for every point of a hair, scored over
+/// all of them; a source must lie inside the crop (`region`) and hold no other defect. `None` when
+/// no candidate qualifies.
+fn film_dust_source(img: &lightcraft_raster::Rgb32f, found: &[lightcraft_pipeline::film_dust::Found], k: usize, r: f64, region: (f64, f64, f64, f64)) -> Option<Point> {
+    let (w, h) = (img.width as f64, img.height as f64);
+    let long = w.max(h);
+    let px = |p: (f64, f64)| ((p.0 * w) as f32, (p.1 * h) as f32);
+    let pts: Vec<(f32, f32)> = found.get(k)?.points.iter().map(|&p| px(p)).collect();
+    let r = r as f32;
+    let (x0, y0, x1, y1) = ((region.0 * w) as f32, (region.1 * h) as f32, (region.2 * w) as f32, (region.3 * h) as f32);
+    let others: Vec<((f32, f32), f32)> =
+        found.iter().enumerate().filter(|(j, _)| *j != k).flat_map(|(_, o)| o.points.iter().map(move |&p| (px(p), (o.radius * long) as f32))).collect();
+    let mut best: Option<(f32, (f32, f32))> = None;
+    'candidate: for d in lightcraft_pipeline::spots::candidates(r) {
+        let mut total = 0.0;
+        for &(tx, ty) in &pts {
+            let (sx, sy) = (tx + d.0, ty + d.1);
+            // inside the crop with its whole patch, and clear of the other defects
+            if sx - r < x0 || sy - r < y0 || sx + r > x1 || sy + r > y1 {
+                continue 'candidate;
+            }
+            if others.iter().any(|&((ox, oy), or)| ((ox - sx).powi(2) + (oy - sy).powi(2)).sqrt() < or + r) {
+                continue 'candidate;
+            }
+            if !film_dust_clean_source(img, (tx, ty), (sx, sy), r) {
+                continue 'candidate;
+            }
+            let s = lightcraft_pipeline::spots::score(img, (tx, ty), (sx, sy), r);
+            if s == f32::MAX {
+                continue 'candidate;
+            }
+            total += s;
+        }
+        if best.is_none_or(|(b, _)| total < b) {
+            best = Some((total, d));
+        }
+    }
+    best.map(|(_, d)| Point::new(d.0 as f64 / w, d.1 as f64 / h))
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
